@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 # === Hardcoded API Keys and MongoDB Credentials ===
 try:
-    openai.api_key = "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"
-    tavily_api_key = "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"
+    # openai.api_key = "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"
+    # tavily_api_key = "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"
 
     # MongoDB Credentials
     mongo_username = urllib.parse.quote_plus("tejvir@propertyexchangeindia.com")
