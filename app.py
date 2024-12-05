@@ -214,5 +214,7 @@ def chat_answer(messages, buffer_memory):
 # === Main ===
 
 if __name__ == "__main__":
-     app.run(port=10000)
+    # Use the PORT environment variable from Render for deployment
+    port = int(os.environ.get("PORT", 5000))  # Default to 5000 for local development
+    app.run(host="0.0.0.0", port=port)
 
