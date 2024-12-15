@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 # === Hardcoded API Keys and MongoDB Credentials ===
 try:
-    # openai.api_key = "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"
-    # tavily_api_key = "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"
+    openai.api_key = "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"
+    tavily_api_key = "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"
 
     # MongoDB Credentials
     mongo_username = urllib.parse.quote_plus("tejvir@propertyexchangeindia.com")
@@ -54,7 +54,8 @@ def home():
             {"endpoint": "/fetchip", "description": "Fetch the user's IP address"},
             {"endpoint": "/check-mongo", "description": "Check MongoDB connection"},
             {"endpoint": "/save", "description": "Save data to MongoDB (POST)"},
-            {"endpoint": "/chat", "description": "Chat API (POST)"}
+            {"endpoint": "/chat", "description": "Chat API (POST)"},
+            {"endpoint": "/api/v1/transcript", "description": "Transcript API (POST)"},
         ]
     }), 200
 
@@ -144,6 +145,66 @@ def chat():
         return jsonify({"error": "An error occurred"}), 500
 
 
+@app.route("/api/v1/transcript", methods=["POST"])
+def transcript():
+    """Handle Transcription."""
+    try:
+        # Parse JSON input
+        data = request.get_json()
+        if not data or "userQuery" not in data or not isinstance(data["userQuery"], str):
+            return jsonify({"error": "Invalid input: 'userQuery' is required and must be a string"}), 400
+
+        user_query = data["userQuery"].strip()
+        if not user_query:
+            return jsonify({"error": "Invalid input: 'userQuery' cannot be empty"}), 400
+
+        logger.info("Received userQuery: %s", user_query)
+
+        # Construct the prompt
+        prompt = (
+    "You are a highly skilled assistant specializing in interpreting and refining user queries,"
+    "particularly for real estate searches. Your goal is to take the provided 'userQuery' and transform it into "
+    "a precise, complete, and actionable query that aligns with the user's intent. Please focus on providing "
+    "a query that is specific, relevant to real estate, and ready for use in a property search engine."
+    "\n\n"
+    "Guidelines:\n"
+    "1. Retain key details from the userQuery, such as location, type of property, price range, or specific needs.\n"
+    "2. Ensure the query is formatted naturally and fully expresses the user's intent.\n"
+    "3. Avoid including extraneous text or unrelated details—just the transformed query.\n"
+    "4. Ensure clarity, e.g., if the user mentions a city, include it explicitly in the response.\n\n"
+    f"userQuery: {user_query}"
+)
+
+
+        # Call OpenAI API
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100,
+            temperature=0,
+        )
+
+        logger.info("Response from OpenAI: %s", response)
+
+        # Safely extract the response content
+        query = response.choices[0].message.content.strip() if response and response.choices else None
+        if not query:
+            logger.error("OpenAI response missing 'content'")
+            return jsonify({"error": "Failed to generate query"}), 500
+
+        # Return the refined query
+        return jsonify({"query": query}), 200
+
+    except openai.error.OpenAIError as oe:
+        logger.error("OpenAI API error: %s", oe)
+        return jsonify({"error": "OpenAI API error occurred"}), 500
+    except Exception as e:
+        logger.error("Unhandled exception: %s", e, exc_info=True)
+        return jsonify({"error": "An internal server error occurred"}), 500
+
+
+
+
 # === Helper Functions ===
 
 def create_query(chat_history, buffer_memory):
@@ -198,7 +259,7 @@ def chat_answer(messages, buffer_memory):
         messages[0]["content"] += f""" {prompt} Use this info: {buffer_memory}."""
 
         response = openai.chat.completions.create(
-            model="gpt-4o", messages=messages, temperature=1
+            model="ft:gpt-4o-mini-2024-07-18:righthomeai::Ae3MQ1lN", messages=messages, temperature=1
         )
 
         # Access the content of the first choice from the response
@@ -214,4 +275,4 @@ def chat_answer(messages, buffer_memory):
 # === Main ===
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(port=5000)
