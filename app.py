@@ -5,17 +5,19 @@ import openai
 from pymongo import MongoClient, errors
 import urllib.parse
 import logging
+from dotenv import load_dotenv
+import os
 
 # === Logging Setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+load_dotenv()
 # === Hardcoded API Keys and MongoDB Credentials ===
 try:
-    openai.api_key = "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"
-    tavily_api_key = "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"
-
+    openai.api_key = os.getenv('OPEN_AI_API_KEY')
+    tavily_api_key = os.getenv('TAVILY_API_KEY')
     # MongoDB Credentials
+    
     mongo_username = urllib.parse.quote_plus("tejvir@propertyexchangeindia.com")
     mongo_password = urllib.parse.quote_plus("propertyexchange@123")
 
