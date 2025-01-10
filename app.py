@@ -2,12 +2,11 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import openai
-from pymongo import MongoClient, errors
-import urllib.parse
 import logging
 from dotenv import load_dotenv
 import os
-
+import boto3
+import mysql.connector
 # === Logging Setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,25 +15,21 @@ load_dotenv()
 try:
     openai.api_key = os.getenv('OPEN_AI_API_KEY')
     tavily_api_key = os.getenv('TAVILY_API_KEY')
-    # MongoDB Credentials
-    
-    mongo_username = urllib.parse.quote_plus("tejvir@propertyexchangeindia.com")
-    mongo_password = urllib.parse.quote_plus("propertyexchange@123")
-
-    # Direct connection string without SRV
-    mongodb_uri = (
-        f"mongodb://{mongo_username}:{mongo_password}"
-        f"@cluster0-shard-00-00.mongodb.net:27017,"
-        f"cluster0-shard-00-01.mongodb.net:27017,"
-        f"cluster0-shard-00-02.mongodb.net:27017"
-        "/?ssl=true&replicaSet=atlas-xyz-shard-0&authSource=admin&retryWrites=true&w=majority"
-    )
-
-    # MongoDB Initialization
-    client = MongoClient(mongodb_uri)
-    db = client["property_exchange"]
-    collection = db["chats"]
-    logger.info("MongoDB connection established.")
+    KENDRA_INDEX_ID = os.getenv('KENDRA_INDEX_ID')
+    AWS_REGION = os.getenv('AWS_REGION')
+    ROLE_ARN = os.getenv('ROLE_ARN')
+    aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+    aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+    host=os.getenv('HOST')
+    database=os.getenv('DATABASE')
+    user=os.getenv('USER')
+    password=os.getenv('PASSWORD')
+    kendra_client = boto3.client(
+    "kendra",
+    aws_access_key_id=aws_access_key_id,
+    aws_secret_access_key=aws_secret_access_key,
+    region_name=AWS_REGION,
+)
 
 except Exception as e:
     logger.error("Error initializing APIs or MongoDB: %s", e)
@@ -54,9 +49,8 @@ def home():
         "routes": [
             {"endpoint": "/", "description": "Root route with available endpoints"},
             {"endpoint": "/fetchip", "description": "Fetch the user's IP address"},
-            {"endpoint": "/check-mongo", "description": "Check MongoDB connection"},
-            {"endpoint": "/save", "description": "Save data to MongoDB (POST)"},
             {"endpoint": "/chat", "description": "Chat API (POST)"},
+            {"endpoint": "/save-user-credentials", "description": "Save user credentials (POST)"},
             {"endpoint": "/api/v1/transcript", "description": "Transcript API (POST)"},
         ]
     }), 200
@@ -76,45 +70,28 @@ def fetchip():
         logger.error("Error fetching IP: %s", e)
         return jsonify({"error": "Unable to fetch IP"}), 500
 
-@app.route("/check-mongo", methods=["GET"])
-def check_mongo():
-    """Check MongoDB connection."""
-    try:
-        # Test a simple query to verify MongoDB connection
-        sample_data = collection.find_one()
-        return jsonify({"message": "MongoDB is connected!", "sample_data": sample_data}), 200
-    except errors.PyMongoError as e:
-        logger.error("MongoDB connection error: %s", e)
-        return jsonify({"error": "Failed to connect to MongoDB"}), 500
-
-@app.route("/save", methods=["POST"])
-def save():
-    """Save chat history to MongoDB."""
+@app.route("/save-user-credentials", methods=["POST"])
+def save_user_credentials():
+    """Save user credentials."""
     try:
         data = request.json
-        chat_history = data.get("chat_history")
-        lead_id = data.get("lead_id")
-
-        if not chat_history or not lead_id:
-            return jsonify({"error": "Missing required fields"}), 400
-
-        query = {"lead_id": lead_id}
-        log = collection.find_one(query)
-
-        if not log:
-            doc = {"lead_id": lead_id, "chat_history": chat_history}
-            collection.insert_one(doc)
-            return jsonify({"message": "New collection added"}), 201
-        else:
-            change = {"$set": {"chat_history": chat_history}}
-            collection.update_one(query, change)
-            return jsonify({"message": "Chat history updated"}), 200
-    except errors.PyMongoError as e:
-        logger.error("Database error: %s", e)
-        return jsonify({"error": "Database operation failed"}), 500
+        user_id = data.get("user_id")
+        name = data.get("name")
+        email = data.get("email")
+        if not user_id or not name or not email:
+            return jsonify({"error": "Missing required field"}), 400
+        
+        # Save user credentials to the database
+        connection = create_connection()
+        cursor = connection.cursor()
+        query = "INSERT INTO User (user_id, name, email) VALUES (%s, %s, %s)"
+        cursor.execute(query, (user_id, name, email))
+        connection.commit()
+        connection.close()
+        
+        return jsonify({"message": "User credentials saved successfully"}), 201
     except Exception as e:
-        logger.error("Unexpected error: %s", e)
-        return jsonify({"error": "An error occurred"}), 500
+        logger.error("Error saving user credentials: %s", e)
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -140,12 +117,14 @@ def chat():
             buffer_memory.append(search_results)
 
         bot_reply = chat_answer(messages, buffer_memory)
-        return jsonify({"bot_reply": bot_reply, "buffer_memory": buffer_memory})
+        buffer_memory.append(bot_reply)
+        chat ={"role": "assistant", "content": bot_reply}
+        chat_history.append(chat)
+        return jsonify({"bot_reply": bot_reply})
 
     except Exception as e:
         logger.error("Error handling chat: %s", e)
         return jsonify({"error": "An error occurred"}), 500
-
 
 @app.route("/api/v1/transcript", methods=["POST"])
 def transcript():
@@ -209,6 +188,17 @@ def transcript():
 
 # === Helper Functions ===
 
+
+def create_connection():
+    """Create a database connection."""
+    connection = mysql.connector.connect(
+        host=host,
+        user=user,
+        password=password,
+        database=database
+    )
+    return connection
+
 def create_query(chat_history, buffer_memory):
     """Generate an optimized search query based on chat history."""
     user_prompts = [
@@ -226,7 +216,7 @@ def create_query(chat_history, buffer_memory):
 
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o", messages=prompt, max_tokens=100, temperature=0
+            model="gpt-4o-mini", messages=prompt, max_tokens=100, temperature=0
         )
         logger.info("Response from query creation: %s", response)
         query = response.choices[0].message.content  # Correct way to access content
@@ -249,19 +239,41 @@ def search_query(query):
         logger.error("Error performing search: %s", e)
         return []
 
-
+def kendra_search(query):
+    """
+    Query AWS Kendra for search results.
+    """
+    try:
+        response = kendra_client.query(
+            IndexId=KENDRA_INDEX_ID,
+            QueryText=query,
+            PageSize=3
+        )
+        results = []
+        for item in response.get("ResultItems", []):
+            content = item.get("DocumentExcerpt", {}).get("Text", "")
+            image_link = item.get("DocumentAttributes", [{}])[0].get("Value", {}).get("TextWithLinksValue", "No image available")
+            results.append({
+                "content": content,
+                "image_link": image_link
+            })
+        return results
+    except Exception as e:
+        print(f"Error querying Kendra: {e}")
+        return []
 def chat_answer(messages, buffer_memory):
     """Generate chatbot response."""
     try:
         base_dir = os.path.dirname(__file__)
-        file_path = os.path.join(base_dir, "prompts.txt")
+        file_path = os.path.join(base_dir, "prompt2.txt")
         with open(file_path, "r") as f:
             prompt = f.read()
-
-        messages[0]["content"] += f""" {prompt} Use this info: {buffer_memory}."""
+        query=messages[0]["content"]
+        search_results=kendra_search(query)
+        messages[0]["content"] += f""" {prompt} Use this info: {search_results}."""
 
         response = openai.chat.completions.create(
-            model="ft:gpt-4o-mini-2024-07-18:righthomeai::Ae3MQ1lN", messages=messages, temperature=1
+            model="gpt-4o-mini", messages=messages, temperature=0
         )
 
         # Access the content of the first choice from the response
