@@ -265,7 +265,7 @@ def chat_answer(messages, buffer_memory):
     """Generate chatbot response."""
     try:
         base_dir = os.path.dirname(__file__)
-        file_path = os.path.join(base_dir, "prompt2.txt")
+        file_path = os.path.join(base_dir, "prompts.txt")
         with open(file_path, "r") as f:
             prompt = f.read()
         query=messages[0]["content"]
